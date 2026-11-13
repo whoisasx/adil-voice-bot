@@ -76,7 +76,7 @@ async function requestChat(
       model,
       messages,
       stream: true,
-      temperature: 0.7,
+      temperature: 0.35, // low: faithful to the persona notes over creative embellishment
       max_tokens: config.maxOutputTokens,
       ...extra,
     }),

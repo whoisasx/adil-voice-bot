@@ -21,7 +21,17 @@ const cases = JSON.parse(readFileSync(new URL("./questions.json", import.meta.ur
   (c) => !only || only.includes(c.id),
 );
 
-async function ask(messages) {
+async function ask(messages, attempt = 1) {
+  try {
+    return await askOnce(messages);
+  } catch (err) {
+    if (attempt >= 3) return { text: `[error: ${err.message.split("\n")[0]}]`, ms: 0 };
+    await sleep(3000 * attempt);
+    return ask(messages, attempt + 1);
+  }
+}
+
+async function askOnce(messages) {
   const body = JSON.stringify({ messages });
   const t0 = Date.now();
   let text;
