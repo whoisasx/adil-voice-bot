@@ -7,14 +7,18 @@ import "server-only";
 export const config = {
   apiKey: process.env.LLM_API_KEY ?? process.env.GROQ_API_KEY ?? "",
   baseUrl: (process.env.LLM_BASE_URL ?? "https://api.groq.com/openai/v1").replace(/\/$/, ""),
-  chatModel: process.env.LLM_MODEL ?? "llama-3.3-70b-versatile",
+  /** Tried in order; falls through to the next on model-not-found / access errors. */
+  chatModels: (process.env.LLM_MODEL ?? "openai/gpt-oss-120b,llama-3.3-70b-versatile,openai/gpt-oss-20b,llama-3.1-8b-instant")
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean),
   sttModel: process.env.STT_MODEL ?? "whisper-large-v3-turbo",
 
   /** Guardrails */
   maxAudioBytes: 10 * 1024 * 1024, // 10 MB (~ several minutes of webm/opus)
   maxHistoryMessages: 12,
   maxMessageChars: 2000,
-  maxOutputTokens: 350,
+  maxOutputTokens: 1024, // headroom for reasoning models' hidden thinking tokens
   rateLimit: { requests: 30, windowMs: 60_000 }, // per IP, per route
 } as const;
 

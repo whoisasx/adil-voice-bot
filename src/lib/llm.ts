@@ -8,26 +8,37 @@ export type ChatMessage = { role: "system" | "user" | "assistant"; content: stri
  * re-emits just the text deltas as a plain-text stream.
  */
 export async function streamChat(messages: ChatMessage[], signal?: AbortSignal): Promise<ReadableStream<Uint8Array>> {
-  const res = await fetch(`${config.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: config.chatModel,
-      messages,
-      stream: true,
-      temperature: 0.7,
-      max_tokens: config.maxOutputTokens,
-    }),
-    signal,
-  });
+  let res: Response | null = null;
+  let lastError: UpstreamError | null = null;
 
-  if (!res.ok || !res.body) {
-    const detail = await res.text().catch(() => "");
-    throw new UpstreamError(res.status, detail);
+  for (const model of config.chatModels) {
+    const isReasoning = model.startsWith("openai/gpt-oss");
+    res = await fetch(`${config.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        stream: true,
+        temperature: 0.7,
+        max_tokens: config.maxOutputTokens,
+        ...(isReasoning ? { reasoning_effort: "low", include_reasoning: false } : {}),
+      }),
+      signal,
+    });
+    if (res.ok && res.body) break;
+
+    lastError = new UpstreamError(res.status, await res.text().catch(() => ""));
+    console.error(`[chat] model ${model} failed: ${lastError.status} ${lastError.detail}`);
+    // Only fall through on "this model isn't usable" errors; rate limits/auth go straight back.
+    if (![400, 403, 404].includes(res.status)) throw lastError;
+    res = null;
   }
+
+  if (!res?.body) throw lastError ?? new UpstreamError(500, "No chat models configured");
 
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
