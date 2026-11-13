@@ -1,28 +1,57 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRecorder } from "@/hooks/useRecorder";
 import { takeSentences, useSpeech } from "@/hooks/useSpeech";
-import { MicButton, type BotStatus } from "./MicButton";
-import { SampleQuestions } from "./SampleQuestions";
-import { TextInput } from "./TextInput";
+import { HowItWorks } from "./HowItWorks";
+import { GitHubIcon, TrashIcon } from "./icons";
+import { MicDock, type Banner, type UiState } from "./MicDock";
+import { Profile } from "./Profile";
+import { QuestionDeck } from "./QuestionDeck";
 import { Transcript, type UiMessage } from "./Transcript";
+
+type Phase = "idle" | "recording" | "transcribing" | "thinking";
 
 const uid = () => Math.random().toString(36).slice(2);
 const HOLD_MS = 350; // press longer than this = hold-to-talk (release sends)
 
+const REC_LABEL: Record<UiState, string> = {
+  idle: "Ready",
+  listening: "Listening",
+  transcribing: "Transcribing",
+  thinking: "Thinking",
+  speaking: "Speaking",
+  error: "Mic blocked",
+};
+
+const MIC_BLOCKED: Banner = {
+  kind: "mic",
+  title: "We can’t hear you yet",
+  message: "Your browser blocked the microphone. Click the lock icon next to the web address, set Microphone to “Allow”, then try again.",
+};
+const info = (title: string, message: string): Banner => ({ kind: "info", title, message });
+
 export function VoiceBot({ sampleQuestions }: { sampleQuestions: string[] }) {
   const [messages, setMessages] = useState<UiMessage[]>([]);
-  const [status, setStatus] = useState<BotStatus>("idle");
-  const [error, setError] = useState<string | null>(null);
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [banner, setBanner] = useState<Banner | null>(null);
   const [muted, setMuted] = useState(false);
+  const [holding, setHolding] = useState(false);
+  const [streamingId, setStreamingId] = useState<string | null>(null);
+  const [announce, setAnnounce] = useState("");
 
   const recorder = useRecorder();
   const speech = useSpeech();
   const abortRef = useRef<AbortController | null>(null);
   const messagesRef = useRef<UiMessage[]>([]);
-  const statusRef = useRef<BotStatus>("idle");
+  const phaseRef = useRef<Phase>("idle");
   const mutedRef = useRef(false);
+  const speakingRef = useRef(false);
+  const streamingRef = useRef<string | null>(null);
+
+  const rootRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Press-gesture bookkeeping (refs so pointer/key handlers never see stale state).
   const pressAtRef = useRef(0);
@@ -35,30 +64,58 @@ export function VoiceBot({ sampleQuestions }: { sampleQuestions: string[] }) {
     messagesRef.current = messages;
   }, [messages]);
   useEffect(() => {
-    statusRef.current = status;
-  }, [status]);
+    phaseRef.current = phase;
+  }, [phase]);
   useEffect(() => {
     mutedRef.current = muted;
   }, [muted]);
+  useEffect(() => {
+    speakingRef.current = speech.isSpeaking;
+  }, [speech.isSpeaking]);
+  useEffect(() => {
+    streamingRef.current = streamingId;
+  }, [streamingId]);
 
-  const displayStatus: BotStatus = status === "idle" && speech.isSpeaking ? "speaking" : status;
-  const busy = status !== "idle";
+  const uiState: UiState =
+    phase === "recording"
+      ? "listening"
+      : phase === "transcribing"
+        ? "transcribing"
+        : speech.isSpeaking
+          ? "speaking"
+          : phase === "thinking"
+            ? "thinking"
+            : banner?.kind === "mic"
+              ? "error"
+              : "idle";
 
+  const asked = useMemo(() => new Set(messages.filter((m) => m.role === "user").map((m) => m.content)), [messages]);
+
+  /** Stop listening, streaming and speaking. Marks an interrupted answer as "(stopped)". */
   const stopEverything = useCallback(() => {
+    const interrupted = speakingRef.current || streamingRef.current;
     abortRef.current?.abort();
     speech.cancel();
-    setStatus("idle");
+    if (interrupted) {
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        return last?.role === "assistant" && last.content ? [...prev.slice(0, -1), { ...last, stopped: true }] : prev;
+      });
+    }
+    setStreamingId(null);
+    setPhase("idle");
   }, [speech]);
 
   const ask = useCallback(
     async (question: string) => {
-      setError(null);
+      setBanner(null);
       speech.cancel();
       const userMsg: UiMessage = { id: uid(), role: "user", content: question };
       const botMsg: UiMessage = { id: uid(), role: "assistant", content: "" };
       const history = [...messagesRef.current, userMsg];
       setMessages([...history, botMsg]);
-      setStatus("thinking");
+      setPhase("thinking");
+      setStreamingId(botMsg.id);
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -93,14 +150,18 @@ export function VoiceBot({ sampleQuestions }: { sampleQuestions: string[] }) {
           }
         }
         if (!mutedRef.current && pending.trim()) speech.enqueue(pending);
-        if (!full.trim()) throw new Error("I didn't get an answer — please try again.");
+        if (!full.trim()) throw new Error("I didn't get an answer. Please try again.");
+        setAnnounce(`Adil answered: ${full}`);
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
-        setError((err as Error).message);
+        setBanner(info("Something went wrong", (err as Error).message));
         setMessages((prev) => prev.filter((m) => m.id !== botMsg.id || m.content));
       } finally {
-        if (abortRef.current === controller) abortRef.current = null;
-        setStatus("idle");
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+          setStreamingId(null);
+          setPhase("idle");
+        }
       }
     },
     [speech],
@@ -109,13 +170,14 @@ export function VoiceBot({ sampleQuestions }: { sampleQuestions: string[] }) {
   const finishRecording = useCallback(async () => {
     if (finishingRef.current) return;
     finishingRef.current = true;
+    setHolding(false);
     try {
       await startingRef.current;
-      setStatus("transcribing");
+      setPhase("transcribing");
       const rec = await recorder.stop();
       if (!rec || rec.durationMs < 400 || !rec.heardSpeech) {
-        setStatus("idle");
-        setError("I didn't catch that. Tap the mic and ask your question, or hold to talk.");
+        setPhase("idle");
+        setBanner(info("I didn’t catch that", "Tap the mic and ask your question, or hold it while you talk."));
         return;
       }
       const form = new FormData();
@@ -126,8 +188,8 @@ export function VoiceBot({ sampleQuestions }: { sampleQuestions: string[] }) {
       if (!data.text) throw new Error("I couldn't hear anything. Please try again.");
       await ask(data.text);
     } catch (err) {
-      setError((err as Error).message);
-      setStatus("idle");
+      setBanner(info("Something went wrong", (err as Error).message));
+      setPhase("idle");
     } finally {
       finishingRef.current = false;
     }
@@ -135,33 +197,37 @@ export function VoiceBot({ sampleQuestions }: { sampleQuestions: string[] }) {
 
   const onPressStart = useCallback(() => {
     speech.unlock();
-    const s = statusRef.current;
+    const p = phaseRef.current;
 
-    if (speech.isSpeaking && s === "idle") {
+    // Tap while answering or speaking = stop.
+    if (speakingRef.current || p === "thinking") {
       ignoreReleaseRef.current = true;
       stopEverything();
       return;
     }
-    if (s === "recording") {
+    if (p === "recording") {
       ignoreReleaseRef.current = true; // tap again = send
       void finishRecording();
       return;
     }
-    if (s !== "idle") return;
+    if (p !== "idle" || !recorder.isSupported) return;
 
-    setError(null);
+    setBanner(null);
     pressAtRef.current = performance.now();
     holdingRef.current = true;
-    setStatus("recording");
+    setPhase("recording");
+    const holdTimer = setTimeout(() => holdingRef.current && setHolding(true), HOLD_MS);
     startingRef.current = recorder
       .start(() => {
         if (holdingRef.current) return false; // holding: user decides when to stop
         void finishRecording();
       })
       .catch(() => {
+        clearTimeout(holdTimer);
         holdingRef.current = false;
-        setStatus("idle");
-        setError("Microphone access was blocked. Allow mic access in your browser, or type your question below.");
+        setHolding(false);
+        setPhase("idle");
+        setBanner(MIC_BLOCKED);
       });
   }, [finishRecording, recorder, speech, stopEverything]);
 
@@ -172,23 +238,30 @@ export function VoiceBot({ sampleQuestions }: { sampleQuestions: string[] }) {
     }
     if (!holdingRef.current) return;
     holdingRef.current = false;
+    setHolding(false);
     // Long press = hold-to-talk → release sends. Short tap = keep listening; auto-stops on silence.
-    if (statusRef.current === "recording" && performance.now() - pressAtRef.current > HOLD_MS) {
+    if (phaseRef.current === "recording" && performance.now() - pressAtRef.current > HOLD_MS) {
       void finishRecording();
     }
   }, [finishRecording]);
 
-  // Global spacebar push-to-talk (ignored while typing).
+  // Global keys: hold Space to talk (ignored while typing or on other controls), Esc to stop.
   useEffect(() => {
-    const typing = (t: EventTarget | null) =>
-      t instanceof HTMLElement && (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(t.tagName));
+    const skip = (t: EventTarget | null) =>
+      t instanceof HTMLElement &&
+      (t.isContentEditable || ["INPUT", "TEXTAREA", "SELECT", "BUTTON", "A", "SUMMARY"].includes(t.tagName));
     const down = (e: KeyboardEvent) => {
-      if (e.code !== "Space" || e.repeat || typing(e.target)) return;
+      if (e.key === "Escape") {
+        if (phaseRef.current === "recording") void finishRecording();
+        else if (speakingRef.current || phaseRef.current === "thinking") stopEverything();
+        return;
+      }
+      if (e.code !== "Space" || e.repeat || skip(e.target)) return;
       e.preventDefault();
       onPressStart();
     };
     const up = (e: KeyboardEvent) => {
-      if (e.code !== "Space" || typing(e.target)) return;
+      if (e.code !== "Space" || skip(e.target)) return;
       e.preventDefault();
       onPressEnd();
     };
@@ -198,66 +271,116 @@ export function VoiceBot({ sampleQuestions }: { sampleQuestions: string[] }) {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
     };
-  }, [onPressStart, onPressEnd]);
+  }, [onPressStart, onPressEnd, finishRecording, stopEverything]);
+
+  // Keep page padding in sync with the fixed mobile dock.
+  useEffect(() => {
+    const dock = dockRef.current;
+    if (!dock) return;
+    const ro = new ResizeObserver(() => document.body.style.setProperty("--dock-h", `${dock.offsetHeight + 16}px`));
+    ro.observe(dock);
+    return () => ro.disconnect();
+  }, []);
 
   const askTyped = useCallback(
     (q: string) => {
       speech.unlock();
+      if (phaseRef.current === "thinking" || speakingRef.current) stopEverything();
       void ask(q);
     },
-    [ask, speech],
+    [ask, speech, stopEverything],
   );
 
+  const clear = () => {
+    stopEverything();
+    setMessages([]);
+    setBanner(null);
+    setAnnounce("Conversation cleared.");
+  };
+
+  const busy = phase === "recording" || phase === "transcribing";
+
   return (
-    <div className="flex w-full flex-col items-center gap-6">
-      <MicButton
-        status={displayStatus}
-        level={recorder.level}
-        disabled={!recorder.isSupported && displayStatus !== "speaking"}
-        onPressStart={onPressStart}
-        onPressEnd={onPressEnd}
-      />
+    <div className="room" ref={rootRef} data-state={uiState}>
+      <a className="skip" href="#ask-input">
+        Skip to typing a question
+      </a>
 
-      {!recorder.isSupported && (
-        <p className="text-center text-sm text-amber-600">Voice recording isn&apos;t supported in this browser. Type your question below.</p>
-      )}
-      {error && (
-        <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-center text-sm text-rose-700 dark:bg-rose-950/50 dark:text-rose-300">
-          {error}
-        </p>
-      )}
+      <aside className="left" aria-label="Candidate">
+        <Profile />
+        <QuestionDeck questions={sampleQuestions} asked={asked} disabled={busy} onPick={askTyped} />
+        <HowItWorks />
+        <p className="foot">Works best in Chrome, Edge, or Safari. Allow microphone access when prompted.</p>
+      </aside>
 
-      <Transcript messages={messages} />
+      <main className="right" id="main">
+        <section className="panel" aria-labelledby="convTitle">
+          <header className="panel-head">
+            <h2 id="convTitle">
+              Interview{" "}
+              <span className="rec">
+                <i aria-hidden />
+                <span>{REC_LABEL[uiState]}</span>
+              </span>
+            </h2>
+            <div className="meta">
+              <button
+                type="button"
+                className={`pill${muted ? " off" : ""}`}
+                aria-pressed={!muted}
+                title={muted ? "Voice is off: tap to turn it on" : "Tap to turn the voice off and just read"}
+                onClick={() => {
+                  if (!muted) speech.cancel();
+                  setMuted((m) => !m);
+                }}
+              >
+                <span className="wave-ico" aria-hidden>
+                  <i />
+                  <i />
+                  <i />
+                  <i />
+                </span>
+                {muted ? "Voice off" : speech.engine === "natural" ? "Natural voice" : "Browser voice"}
+              </button>
+              {messages.length > 0 && (
+                <button className="link-btn" type="button" title="Clear conversation" onClick={clear}>
+                  <TrashIcon />
+                  <span className="clear-lbl">Clear conversation</span>
+                </button>
+              )}
+              <a className="link-btn" href="https://github.com/whoisasx/adil-voice-bot" target="_blank" rel="noopener noreferrer">
+                <GitHubIcon />
+                <span className="gh-lbl">GitHub</span>
+                <span className="sr-only"> (opens in a new tab)</span>
+              </a>
+            </div>
+          </header>
 
-      {!messages.length && <SampleQuestions questions={sampleQuestions} disabled={busy} onPick={askTyped} />}
+          <Transcript
+            messages={messages}
+            live={phase === "recording" ? "listening" : phase === "transcribing" ? "transcribing" : null}
+            streamingId={streamingId}
+          />
 
-      <TextInput disabled={busy} onSubmit={askTyped} />
+          <MicDock
+            state={uiState}
+            holding={holding}
+            level={recorder.level}
+            banner={banner}
+            voiceSupported={recorder.isSupported}
+            rootRef={rootRef}
+            dockRef={dockRef}
+            inputRef={inputRef}
+            onPressStart={onPressStart}
+            onPressEnd={onPressEnd}
+            onAsk={askTyped}
+            onDismiss={() => setBanner(null)}
+          />
+        </section>
+      </main>
 
-      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-zinc-500">
-        <button
-          type="button"
-          onClick={() => {
-            if (!muted) speech.cancel();
-            setMuted((m) => !m);
-          }}
-          className="underline-offset-2 hover:underline"
-        >
-          {muted ? "🔇 Voice off: tap to unmute" : "🔊 Voice on: tap to mute"}
-        </button>
-        <span className="text-zinc-400">{speech.engine === "natural" ? "Natural voice" : "Browser voice"}</span>
-        {messages.length > 0 && (
-          <button
-            type="button"
-            onClick={() => {
-              stopEverything();
-              setMessages([]);
-              setError(null);
-            }}
-            className="underline-offset-2 hover:underline"
-          >
-            Start over
-          </button>
-        )}
+      <div className="sr-only" aria-live="polite">
+        {announce}
       </div>
     </div>
   );
