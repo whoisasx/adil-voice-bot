@@ -41,3 +41,7 @@ yarn-error.log*
 next-env.d.ts
 
 !.env.example
+
+# local-only: design explorations and generated agent notes
+/design/
+AGENTS.md
