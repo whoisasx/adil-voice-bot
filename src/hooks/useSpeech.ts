@@ -135,7 +135,10 @@ export function useSpeech() {
     (text: string) => {
       const clean = text.replace(/[*_#`>]/g, "").trim();
       if (!clean) return;
-      for (const chunk of splitForTts(clean)) {
+      // When nothing is playing yet, keep the first chunk short so audio starts sooner.
+      const idle = !playingRef.current && queueRef.current.length === 0;
+      const chunks = idle ? splitFirst(clean) : splitForTts(clean);
+      for (const chunk of chunks) {
         const item: Item = { text: chunk, audio: null };
         // Start fetching the first chunk immediately for the lowest latency.
         if (!playingRef.current && queueRef.current.length === 0) item.audio = fetchTts(chunk);
@@ -162,6 +165,14 @@ export function useSpeech() {
   }, [browserTts]);
 
   return { isSupported, isSpeaking, engine, enqueue, cancel, unlock };
+}
+
+/** Short lead-in chunk (cut at the first natural pause after ~40 chars), then the rest. */
+function splitFirst(text: string): string[] {
+  if (text.length <= 90) return [text];
+  const m = /^.{40,90}?[,;:—]\s/.exec(text);
+  if (!m) return splitForTts(text);
+  return [m[0].trim(), ...splitForTts(text.slice(m[0].length).trim())];
 }
 
 /** Splits a sentence into ≤MAX_CHUNK pieces at natural pauses. */
