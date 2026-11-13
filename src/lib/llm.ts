@@ -33,8 +33,8 @@ export async function streamChat(messages: ChatMessage[], signal?: AbortSignal):
 
     lastError = new UpstreamError(res.status, await res.text().catch(() => ""));
     console.error(`[chat] model ${model} failed: ${lastError.status} ${lastError.detail}`);
-    // Only fall through on "this model isn't usable" errors; rate limits/auth go straight back.
-    if (![400, 403, 404].includes(res.status)) throw lastError;
+    // Fall through on "model unusable" and rate-limit errors (limits are per model); auth/server errors go straight back.
+    if (![400, 403, 404, 413, 429].includes(res.status)) throw lastError;
     res = null;
   }
 
