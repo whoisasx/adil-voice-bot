@@ -1,36 +1,46 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Talk to Adil — Voice Interview Bot
 
-## Getting Started
+A web voice bot that answers interview questions the way Adil would. Open the link, tap the mic, ask a question, hear the answer. No install, no API key needed for testers.
 
-First, run the development server:
+## How it works
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```
+Mic (MediaRecorder) ──► /api/transcribe ──► Whisper (speech → text)
+                                               │
+Browser TTS ◄── sentence queue ◄── /api/chat ◄─┘  LLM + persona prompt (streamed)
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- **Speech-to-text:** browser records audio → server sends it to Whisper (`whisper-large-v3-turbo` on Groq). Works in Chrome, Safari, Firefox, and mobile.
+- **Answers:** streamed from an OpenAI-compatible chat API (`llama-3.3-70b-versatile` on Groq) with a first-person persona prompt grounded in real facts (`src/lib/persona.ts`).
+- **Text-to-speech:** the browser's built-in voice, spoken sentence-by-sentence while the answer streams, for low latency.
+- **Fallbacks:** clickable sample questions and a text box if the mic is unavailable; mute toggle; friendly errors.
+- **Safety:** API key stays server-side; per-IP rate limiting; input size limits.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Project structure
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```
+src/
+  app/
+    page.tsx                 Landing page
+    api/chat/route.ts        Streams the persona's answer
+    api/transcribe/route.ts  Audio → text
+  components/                VoiceBot (orchestrator), MicButton, Transcript, SampleQuestions, TextInput
+  hooks/                     useRecorder (mic), useSpeech (TTS queue)
+  lib/
+    persona.ts               ← who "I" am: facts + system prompt
+    llm.ts                   OpenAI-compatible chat + transcription client
+    config.ts                Env-driven config & limits
+    rate-limit.ts            In-memory per-IP limiter
+```
 
-## Learn More
+## Run locally
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+cp .env.example .env.local   # add GROQ_API_KEY
+npm install
+npm run dev                  # http://localhost:3000
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Deploy
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Deploy to Vercel and set `GROQ_API_KEY` in the project's environment variables.
