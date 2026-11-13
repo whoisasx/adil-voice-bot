@@ -7,14 +7,18 @@ import { config } from "./config";
  */
 const buckets = new Map<string, { count: number; resetAt: number }>();
 
-export function rateLimit(request: Request, scope: string): Response | null {
+export function rateLimit(
+  request: Request,
+  scope: string,
+  limit: { requests: number; windowMs: number } = config.rateLimit,
+): Response | null {
   const ip =
     request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
     request.headers.get("x-real-ip") ||
     "unknown";
   const key = `${scope}:${ip}`;
   const now = Date.now();
-  const { requests, windowMs } = config.rateLimit;
+  const { requests, windowMs } = limit;
 
   const bucket = buckets.get(key);
   if (!bucket || bucket.resetAt <= now) {

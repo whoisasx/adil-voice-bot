@@ -1,8 +1,8 @@
 export type BotStatus = "idle" | "recording" | "transcribing" | "thinking" | "speaking";
 
 const LABELS: Record<BotStatus, string> = {
-  idle: "Tap to ask a question",
-  recording: "Listening… tap to stop",
+  idle: "Tap and ask, or hold to talk",
+  recording: "Listening… stops when you pause",
   transcribing: "Transcribing…",
   thinking: "Thinking…",
   speaking: "Speaking… tap to stop",
@@ -10,42 +10,81 @@ const LABELS: Record<BotStatus, string> = {
 
 export function MicButton({
   status,
+  level,
   disabled,
-  onClick,
+  onPressStart,
+  onPressEnd,
 }: {
   status: BotStatus;
+  level: number;
   disabled?: boolean;
-  onClick: () => void;
+  onPressStart: () => void;
+  onPressEnd: () => void;
 }) {
   const busy = status === "transcribing" || status === "thinking";
   const active = status === "recording";
 
   return (
     <div className="flex flex-col items-center gap-4">
-      <button
-        type="button"
-        onClick={onClick}
-        disabled={disabled || busy}
-        aria-label={LABELS[status]}
-        className={[
-          "relative grid h-28 w-28 place-items-center rounded-full text-white shadow-xl transition",
-          "focus-visible:outline-4 focus-visible:outline-offset-4 focus-visible:outline-indigo-400",
-          "disabled:cursor-not-allowed disabled:opacity-60",
-          active ? "bg-rose-500 scale-105" : status === "speaking" ? "bg-emerald-500" : "bg-indigo-600 hover:bg-indigo-500",
-        ].join(" ")}
-      >
-        {active && <span className="absolute inset-0 animate-ping rounded-full bg-rose-400/50" />}
-        {busy ? (
-          <span className="h-10 w-10 animate-spin rounded-full border-4 border-white/30 border-t-white" />
-        ) : status === "speaking" || active ? (
-          <StopIcon />
-        ) : (
-          <MicIcon />
+      <div className="relative grid place-items-center">
+        {/* live mic level ring */}
+        {active && (
+          <span
+            aria-hidden
+            className="absolute rounded-full bg-rose-400/30 transition-[width,height] duration-75"
+            style={{ width: `${112 + level * 70}px`, height: `${112 + level * 70}px` }}
+          />
         )}
-      </button>
-      <p className="text-sm font-medium text-zinc-600 dark:text-zinc-300" aria-live="polite">
-        {LABELS[status]}
-      </p>
+        <button
+          type="button"
+          disabled={disabled || busy}
+          aria-label={LABELS[status]}
+          onPointerDown={(e) => {
+            if (e.button !== 0) return;
+            e.currentTarget.setPointerCapture(e.pointerId);
+            onPressStart();
+          }}
+          onPointerUp={onPressEnd}
+          onPointerCancel={onPressEnd}
+          onKeyDown={(e) => {
+            if ((e.key === "Enter" || e.key === " ") && !e.repeat) {
+              e.preventDefault();
+              e.stopPropagation();
+              onPressStart();
+            }
+          }}
+          onKeyUp={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              e.stopPropagation();
+              onPressEnd();
+            }
+          }}
+          onContextMenu={(e) => e.preventDefault()}
+          className={[
+            "relative grid h-28 w-28 touch-none select-none place-items-center rounded-full text-white shadow-xl transition",
+            "focus-visible:outline-4 focus-visible:outline-offset-4 focus-visible:outline-indigo-400",
+            "disabled:cursor-not-allowed disabled:opacity-60",
+            active ? "scale-105 bg-rose-500" : status === "speaking" ? "bg-emerald-500" : "bg-indigo-600 hover:bg-indigo-500",
+          ].join(" ")}
+        >
+          {busy ? (
+            <span className="h-10 w-10 animate-spin rounded-full border-4 border-white/30 border-t-white" />
+          ) : status === "speaking" || active ? (
+            <StopIcon />
+          ) : (
+            <MicIcon />
+          )}
+        </button>
+      </div>
+      <div className="text-center">
+        <p className="text-sm font-medium text-zinc-600 dark:text-zinc-300" aria-live="polite">
+          {LABELS[status]}
+        </p>
+        <p className="mt-1 hidden text-xs text-zinc-400 sm:block">
+          Tip: hold <kbd className="rounded border border-zinc-300 px-1 font-mono dark:border-zinc-700">Space</kbd> to talk
+        </p>
+      </div>
     </div>
   );
 }
