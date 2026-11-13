@@ -24,7 +24,10 @@ export async function POST(request: Request) {
 
   try {
     const stream = await streamChat(
-      [{ role: "system", content: buildSystemPrompt() }, ...history],
+      [
+        { role: "system", content: buildSystemPrompt(history.filter((m) => m.role === "user").map((m) => m.content)) },
+        ...history,
+      ],
       request.signal,
     );
     return new Response(stream, {
