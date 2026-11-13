@@ -11,7 +11,15 @@ export async function streamChat(messages: ChatMessage[], signal?: AbortSignal):
   let res: Response | null = null;
   let lastError: UpstreamError | null = null;
 
-  for (const model of config.chatModels) {
+  // Up to 2 passes over the model list; if every model was rate-limited, wait out the
+  // shortest suggested delay (capped) and try once more.
+  for (let pass = 0; pass < 2 && !res?.body; pass++) {
+    if (pass === 1) {
+      if (lastError?.status !== 429) break;
+      const suggested = Number(/try again in ([\d.]+)s/i.exec(lastError.detail)?.[1] ?? 4);
+      await new Promise((r) => setTimeout(r, Math.min(Math.max(suggested, 1), 8) * 1000));
+    }
+    for (const model of config.chatModels) {
     const isReasoning = model.startsWith("openai/gpt-oss");
     res = await fetch(`${config.baseUrl}/chat/completions`, {
       method: "POST",
@@ -36,6 +44,7 @@ export async function streamChat(messages: ChatMessage[], signal?: AbortSignal):
     // Fall through on "model unusable" and rate-limit errors (limits are per model); auth/server errors go straight back.
     if (![400, 403, 404, 413, 429].includes(res.status)) throw lastError;
     res = null;
+    }
   }
 
   if (!res?.body) throw lastError ?? new UpstreamError(500, "No chat models configured");

@@ -8,7 +8,7 @@ export const config = {
   apiKey: process.env.LLM_API_KEY ?? process.env.GROQ_API_KEY ?? "",
   baseUrl: (process.env.LLM_BASE_URL ?? "https://api.groq.com/openai/v1").replace(/\/$/, ""),
   /** Tried in order; falls through to the next on model-not-found / access errors. */
-  chatModels: (process.env.LLM_MODEL ?? "openai/gpt-oss-120b,llama-3.3-70b-versatile,openai/gpt-oss-20b,llama-3.1-8b-instant")
+  chatModels: (process.env.LLM_MODEL ?? "openai/gpt-oss-120b,openai/gpt-oss-20b")
     .split(",")
     .map((m) => m.trim())
     .filter(Boolean),
@@ -18,7 +18,7 @@ export const config = {
   maxAudioBytes: 10 * 1024 * 1024, // 10 MB (~ several minutes of webm/opus)
   maxHistoryMessages: 12,
   maxMessageChars: 2000,
-  maxOutputTokens: 1024, // headroom for reasoning models' hidden thinking tokens
+  maxOutputTokens: 600, // ~90-word answer + low-effort reasoning; counts against per-minute token limits
   rateLimit: { requests: 30, windowMs: 60_000 }, // per IP, per route
 } as const;
 
