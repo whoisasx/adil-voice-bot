@@ -1,20 +1,24 @@
-# Talk to Adil — Voice Interview Bot
+# Talk to Adil: Voice Interview Bot
 
-A web voice bot that answers interview questions the way Adil would. Open the link, tap the mic, ask a question, hear the answer. No install, no API key needed for testers.
+**Live:** https://adil-voice-bot.vercel.app
+
+A web voice bot that answers interview questions the way Adil would. Open the link, tap the mic, ask a question, hear the answer. No install, no sign-up, no API key needed for testers.
 
 ## How it works
 
 ```
-Mic (MediaRecorder) ──► /api/transcribe ──► Whisper (speech → text)
-                                               │
-Browser TTS ◄── sentence queue ◄── /api/chat ◄─┘  LLM + persona prompt (streamed)
+Mic (MediaRecorder + silence detection) ──► /api/transcribe ──► Whisper (speech → text)
+                                                                   │
+Natural voice ◄── /api/tts (Orpheus) ◄── sentence queue ◄── /api/chat ◄┘  LLM + persona prompt (streamed)
 ```
 
-- **Speech-to-text:** browser records audio → server sends it to Whisper (`whisper-large-v3-turbo` on Groq). Works in Chrome, Safari, Firefox, and mobile.
-- **Answers:** streamed from an OpenAI-compatible chat API (`llama-3.3-70b-versatile` on Groq) with a first-person persona prompt grounded in real facts (`src/lib/persona.ts`).
-- **Text-to-speech:** the browser's built-in voice, spoken sentence-by-sentence while the answer streams, for low latency.
-- **Fallbacks:** clickable sample questions and a text box if the mic is unavailable; mute toggle; friendly errors.
-- **Safety:** API key stays server-side; per-IP rate limiting; input size limits.
+- **Talking:** tap and speak; recording stops on its own when you pause. Or hold the button (or the Space key) and release to send. A live ring shows your mic level.
+- **Speech to text:** Whisper (`whisper-large-v3-turbo` on Groq). Works in Chrome, Safari, Firefox and on mobile.
+- **Answers:** streamed from `gpt-oss-120b` on Groq with a first-person persona prompt built only from real resume and work facts (`src/lib/persona.ts`), with a rule never to invent details.
+- **Voice:** natural text-to-speech (Groq Orpheus). Each sentence is turned into speech while the answer is still streaming, and the next one is prepared while the current one plays, so speaking starts in about 2.5 seconds. Falls back to the browser's built-in voice if needed.
+- **Reliability on a free tier:** fallback across models (`gpt-oss-120b` → `gpt-oss-20b` → Qwen → optional Vercel AI Gateway), automatic wait-and-retry on rate limits, and a compact prompt to fit more answers per minute.
+- **Fallbacks for people:** clickable sample questions, a text box if the mic is blocked, mute and start-over controls, clear error messages.
+- **Safety:** API key stays on the server; per-IP rate limiting; input size limits.
 
 ## Project structure
 
@@ -22,14 +26,17 @@ Browser TTS ◄── sentence queue ◄── /api/chat ◄─┘  LLM + person
 src/
   app/
     page.tsx                 Landing page
-    api/chat/route.ts        Streams the persona's answer
+    api/chat/route.ts        Streams the persona's answer (with model fallback)
     api/transcribe/route.ts  Audio → text
-  components/                VoiceBot (orchestrator), MicButton, Transcript, SampleQuestions, TextInput
-  hooks/                     useRecorder (mic), useSpeech (TTS queue)
+    api/tts/route.ts         Text → natural speech
+  components/                VoiceBot (orchestrator), MicButton, Transcript, SampleQuestions, TextInput, HowItWorks
+  hooks/
+    useRecorder.ts           Mic recording, level meter, silence auto-stop
+    useSpeech.ts             Speech queue: natural voice with browser fallback
   lib/
-    persona.ts               ← who "I" am: facts + system prompt
-    llm.ts                   OpenAI-compatible chat + transcription client
-    config.ts                Env-driven config & limits
+    persona.ts               Who "I" am: facts + system prompt
+    llm.ts                   Chat (multi-provider fallback), transcription, speech clients
+    config.ts                Env-driven models, limits, providers
     rate-limit.ts            In-memory per-IP limiter
 ```
 
@@ -43,4 +50,6 @@ npm run dev                  # http://localhost:3000
 
 ## Deploy
 
-Deploy to Vercel and set `GROQ_API_KEY` in the project's environment variables.
+Deploy to Vercel and set `GROQ_API_KEY` in the project's environment variables. The Orpheus voice requires accepting its model terms once in the Groq console.
+
+The version originally submitted is tagged `v1-submission`.
